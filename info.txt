@@ -1,0 +1,7 @@
+; ; glGetString(GL_VERSION)
+    ; mov ecx, 0x1F02
+    ; call glGetString
+
+    ; mov rdx, rax
+    ; lea rcx, [rel version_format]
+    ; call printf

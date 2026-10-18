@@ -1,0 +1,291 @@
+section .data
+    window_title db "Window 243", 0
+
+    clear_red dd 0.1
+    clear_green dd 0.2
+    clear_blue dd 0.8
+    clear_alpha dd 1.0
+
+    name_glGenVertexArrays db "glGenVertexArrays", 0
+
+    vertex_shader_src:
+        db "#version 330 core", 10 ;use GLSL 3.30 core
+        db "layout (location = 0) in vec2 aPos;", 10
+        db "void main()", 10
+        db "{", 10
+        db "    gl_Position = vec4(aPos, 0.0, 1.0);", 10 ;apos.x and y, 0.0 is z, 1.0 is w
+        db "}", 10
+        db 0
+
+    fragment_shader_src:
+        db "version 330 core", 10
+        db "out vec4 FragColor;", 10
+        db "void main()", 10
+        db "{", 10
+        db "    FragColor = vec4(1.0, 0.5, 0.1, 1.0);", 10
+        db "}", 10
+        db 0
+
+    name_glCreateShader db "glCreateShader", 0
+    name_glShaderSource db "glShaderSource", 0
+    name_glCompileShader db "glCompileShader", 0
+    name_glGetShaderiv db "glGetShaderiv", 0
+    name_glCreateProgram db "glCreateProgram", 0
+    name_glAttachShader db "glAttachShader", 0
+
+    msg_shader_ok db "Vertex shader compiled", 10, 0
+    msg_shader_fail db "Vertex shader failed to compile", 10, 0
+
+
+    ; debugging tools
+    a db "a", 10, 0
+    b db "b", 10, 0
+    c db "c", 10, 0
+    d db "d", 10, 0
+    e db "e", 10, 0
+    error_format db "GLFW error %d: %s", 10, 0
+    no_error_msg db "No GLFW error details available", 10, 0
+    version_format db "OpenGL version: %s", 10, 0
+    msg_func_ok db "Function loaded", 10, 0
+    msg_func_fail db "Failed to load function", 10, 0
+
+section .bss
+    window_ptr resq 1
+    error_description resq 1
+    ptr_glGenVertexArrays resq 1 ;ptrs are the actual function itself, without ptr is the actual object itself
+    ptr_glCreateShader resq 1
+    ptr_glShaderSource resq 1
+    ptr_glCompileShader resq 1
+    ptr_glGetShaderiv resq 1
+    ptr_glCreateProgram resq 1
+    ptr_glAttachShader resq 1
+    vertex_shader resd 1 ;4 bytes
+    vertex_source_ptr resq 1;8 bytes
+    shader_status resd 1
+
+
+section .text
+    global main
+
+    extern printf
+
+    extern glfwInit ;initialise glfw to use glfw. returns 1 (in eax) if succeed, 0 if fail
+    extern glfwGetProcAddress
+    extern glfwWindowHint ;what kind of window to make. two params, hint (which setting to configure) and value. 0x00022001 is the identifier for GLFW_CLIENT_API. value of zero means GLFW_NO_API, telling the system not to create a window
+    extern glfwMakeContextCurrent
+    extern glfwCreateWindow ;width height title monitor share. returns GLFWwindow*, a pointer to an obj. if succeed, pointer is in rax. if fail, rax is 0
+    extern glfwWindowShouldClose ;one param, the pointer to the window
+    extern glfwPollEvents ;processes pending events, no args and returns
+    extern glfwSwapBuffers
+    extern glfwDestroyWindow ;one param, window pointer. cleanup before exiting. ptr is invalid after cleanup
+    extern glfwTerminate ;no params, exit glfw
+    extern glfwGetError
+
+    extern glGetString
+    extern glClearColor ;red green blue alpha/opacity, all floats. because its floats, it goes into xmm
+    extern glClear
+
+main:
+    sub rsp, 40
+
+    call glfwInit
+    test eax, eax
+    jz init_failed
+
+    mov ecx, 0x00022002 ;code for req opengl, GLFW_CONTEXT_VERSION_MAJOR
+    mov edx, 4 ;opengl major version
+    call glfwWindowHint
+
+    mov ecx, 0x00022003 ;GLFW_CONTEXT_VERSION_MINOR
+    mov edx, 6 
+    call glfwWindowHint
+
+    ;requests core profile
+    mov ecx, 0x00022008 ;GLFW_OPENGL_PROFILE
+    mov edx, 0x00032001 ;GLFW_OPENGL_CORE_PROFILE
+    call glfwWindowHint
+
+    mov ecx, 800
+    mov edx, 600
+    lea r8, [rel window_title]
+    xor r9d, r9d
+    mov qword [rsp+32], 0
+    call glfwCreateWindow
+
+    test rax, rax
+    jz create_failed
+
+    mov [rel window_ptr], rax ;pointer is stored in rax, so save to window_ptr
+
+    mov rcx, [rel window_ptr]
+    call glfwMakeContextCurrent ;subsequent opengl calls should operate on this windows context
+
+    lea rcx, [rel name_glGenVertexArrays]
+    call glfwGetProcAddress ;returned function address stored in rax
+
+    test rax, rax
+    jz func_load_failed
+
+    mov [rel ptr_glGenVertexArrays], rax
+
+    ; load glCreateShader
+    lea rcx, [rel name_glCreateShader]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glCreateShader], rax
+
+    ; load glShaderSrc
+    lea rcx, [rel name_glShaderSource]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glShaderSource], rax
+
+    ; load glCompileShader
+    lea rcx, [rel name_glCompileShader]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glCompileShader], rax
+
+    ; load glGetShaderiv
+    lea rcx, [rel name_glGetShaderiv]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glGetShaderiv], rax
+
+    lea rcx, [rel name_glCreateProgram]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glCreateProgram], rax
+
+    lea rcx, [rel name_glAttachShader]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glAttachShader], rax
+
+    lea rcx, [rel msg_func_ok]
+    call printf
+
+    jmp func_load_done
+
+func_load_failed:
+    lea rcx, [rel msg_func_fail]
+    call printf
+
+    mov eax, 1
+    jmp exit
+
+func_load_done:
+    movss xmm0, [rel clear_red]
+    movss xmm1, [rel clear_green]
+    movss xmm2, [rel clear_blue]
+    movss xmm3, [rel clear_alpha]
+    call glClearColor ;sets the colour but not paint the window
+
+    ;create vertex shader
+    mov ecx, 0x00008B31
+    call [rel ptr_glCreateShader]
+
+    test eax, eax
+    jz shader_failed
+
+    mov [rel vertex_shader], eax
+
+    lea rax, [rel vertex_shader_src]
+    mov [rel vertex_source_ptr], rax
+
+    ;gl shader src (shader, 1, &source_ptr, null)
+    mov ecx, [rel vertex_shader]
+    mov edx, 1
+    lea r8, [rel vertex_source_ptr]
+    xor r9d, r9d
+    call [rel ptr_glShaderSource]
+
+    ;compile shader
+
+    mov ecx, [rel vertex_shader]
+    call [rel ptr_glCompileShader]
+
+    ;get shader iv(shader, gl_compile_status, &status)
+    mov ecx, [rel vertex_shader]
+    mov edx, 0x00008B81
+    lea r8, [rel shader_status]
+    call [rel ptr_glGetShaderiv]
+
+    cmp dword [rel shader_status], 0
+    je shader_failed
+
+    lea rcx, [rel msg_shader_ok]
+    call printf
+    jmp shader_check_done
+
+shader_failed:
+    lea rcx, [rel msg_shader_fail]
+    call printf
+
+shader_check_done:
+
+    call ptr_glCreateShader ;---------------
+
+
+loop:
+    mov rcx, [rel window_ptr]
+    call glfwWindowShouldClose
+
+    test eax, eax
+    jnz cleanup
+
+    mov ecx, 0x00004000
+    call glClear ;paints the window GL_COLOR_BUFFER_BIT, clears the colour buffer with what was selected
+
+    mov rcx, [rel window_ptr]
+    call glfwSwapBuffers ;swaps back and front buffers to make the new frame visible
+
+    call glfwPollEvents
+
+    jmp loop
+
+cleanup:
+    mov rcx, [rel window_ptr]
+    call glfwDestroyWindow
+
+    call glfwTerminate
+
+    xor eax, eax
+    jmp exit
+
+create_failed:
+    ;debugging
+    lea rcx, [rel error_description]
+    call glfwGetError ;eax is error code, save in edx
+
+    mov edx, eax
+    mov r8, [rel error_description]
+    test r8, r8
+    jnz .have_description
+
+    lea r8, [rel no_error_msg]
+
+    call glfwTerminate
+    mov eax, 1
+    jmp exit
+
+.have_description:
+    lea rcx, [rel error_format]
+    call printf
+
+    call glfwTerminate
+    mov eax, 1
+    jmp exit
+
+init_failed:
+    mov eax, 1
+
+exit:
+    add rsp, 40
+    ret
