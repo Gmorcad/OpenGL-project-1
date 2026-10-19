@@ -18,7 +18,7 @@ section .data
         db 0
 
     fragment_shader_src:
-        db "version 330 core", 10
+        db "#version 330 core", 10
         db "out vec4 FragColor;", 10
         db "void main()", 10
         db "{", 10
@@ -26,15 +26,25 @@ section .data
         db "}", 10
         db 0
 
+    vertices:
+        dd 0.0, 0.5
+        dd -0.5, -0.5
+        dd 0.5, -0.5
+    
+
     name_glCreateShader db "glCreateShader", 0
     name_glShaderSource db "glShaderSource", 0
     name_glCompileShader db "glCompileShader", 0
     name_glGetShaderiv db "glGetShaderiv", 0
     name_glCreateProgram db "glCreateProgram", 0
     name_glAttachShader db "glAttachShader", 0
+    name_glLinkProgram db "glLinkProgram", 0
+    name_glGetProgramiv db "glGetProgramiv", 0
+    
 
-    msg_shader_ok db "Vertex shader compiled", 10, 0
-    msg_shader_fail db "Vertex shader failed to compile", 10, 0
+    msg_shader_ok db "Shader compiled", 10, 0
+    msg_shader_fail db "Shader failed to compile", 10, 0
+    program_status_id db "Program status ID: %d", 10, 0
 
 
     ; debugging tools
@@ -46,8 +56,10 @@ section .data
     error_format db "GLFW error %d: %s", 10, 0
     no_error_msg db "No GLFW error details available", 10, 0
     version_format db "OpenGL version: %s", 10, 0
-    msg_func_ok db "Function loaded", 10, 0
+    msg_func_ok db "Functions loaded", 10, 0
     msg_func_fail db "Failed to load function", 10, 0
+    msg_create_program_fail db "Failed to create program", 10, 0
+    msg_initialisation_fail db "Failed to initialise GLAD", 10, 0
 
 section .bss
     window_ptr resq 1
@@ -59,8 +71,14 @@ section .bss
     ptr_glGetShaderiv resq 1
     ptr_glCreateProgram resq 1
     ptr_glAttachShader resq 1
+    ptr_glLinkProgram resq 1
+    ptr_glGetProgramiv resq 1
     vertex_shader resd 1 ;4 bytes
-    vertex_source_ptr resq 1;8 bytes
+    vertex_source_ptr resq 1 ;8 bytes
+    fragment_shader resd 1
+    fragment_source_ptr resq 1
+    program resq 1
+    program_status resd 1
     shader_status resd 1
 
 
@@ -128,6 +146,7 @@ main:
 
     mov [rel ptr_glGenVertexArrays], rax
 
+    ; load all functions, because GLAD was not used
     ; load glCreateShader
     lea rcx, [rel name_glCreateShader]
     call glfwGetProcAddress
@@ -168,6 +187,18 @@ main:
     jz func_load_failed
     mov [rel ptr_glAttachShader], rax
 
+    lea rcx, [rel name_glLinkProgram]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glLinkProgram], rax
+
+    lea rcx, [rel name_glGetProgramiv]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glGetProgramiv], rax
+
     lea rcx, [rel msg_func_ok]
     call printf
 
@@ -185,7 +216,7 @@ func_load_done:
     movss xmm1, [rel clear_green]
     movss xmm2, [rel clear_blue]
     movss xmm3, [rel clear_alpha]
-    call glClearColor ;sets the colour but not paint the window
+    call glClearColor ;sets the colour when the colour buffers are cleared
 
     ;create vertex shader
     mov ecx, 0x00008B31
@@ -220,6 +251,40 @@ func_load_done:
     cmp dword [rel shader_status], 0
     je shader_failed
 
+    ;====================================================================================
+    ; Create fragment shader
+    mov ecx, 0x00008B30 ;GL_FRAGMENT_SHADER
+    call [rel ptr_glCreateShader]
+
+    test eax, eax
+    jz shader_failed
+
+    mov [rel fragment_shader], eax
+
+    lea rax, [rel fragment_shader_src]
+    mov [rel fragment_source_ptr], rax
+
+    ;gl shader src (shader, 1, &source_ptr, null)
+    mov ecx, [rel fragment_shader]
+    mov edx, 1
+    lea r8, [rel fragment_source_ptr]
+    xor r9d, r9d
+    call [rel ptr_glShaderSource]
+
+    ;compile shader
+
+    mov ecx, [rel fragment_shader]
+    call [rel ptr_glCompileShader]
+
+    ;get shader iv(shader, gl_compile_status, &status)
+    mov ecx, [rel fragment_shader]
+    mov edx, 0x00008B81
+    lea r8, [rel shader_status]
+    call [rel ptr_glGetShaderiv]
+
+    cmp dword [rel shader_status], 0
+    je shader_failed
+
     lea rcx, [rel msg_shader_ok]
     call printf
     jmp shader_check_done
@@ -230,8 +295,64 @@ shader_failed:
 
 shader_check_done:
 
-    call ptr_glCreateShader ;---------------
+    ; GLuint glCreateProgram(void)
+    call [rel ptr_glCreateProgram]
 
+    test eax, eax 
+    jz .createProgramFail 
+    mov [rel program], eax
+
+    ; Vertex shader
+    ; glAttachShader(program, vshader)
+    mov ecx, [rel program]
+    mov edx, [rel vertex_shader]
+    call [rel ptr_glAttachShader]
+
+    ; void glLinkProgram(GLuint program);
+    mov ecx, [rel program]
+    call [rel ptr_glLinkProgram]
+
+    ; void glGetProgramiv(GLuint program, GLenum pname, GLint *params)
+    mov ecx, [rel program]
+    mov rdx, 0x00008B82 ;GL_LINK_STATUS
+    lea r8, [rel program_status]
+    call [rel ptr_glGetProgramiv]
+
+    lea rcx, [rel program_status_id]
+    mov rdx, [rel program_status]
+    call printf
+
+    ; Fragment shader
+    ; glAttachShader(program, vshader)
+    mov ecx, [rel program]
+    mov edx, [rel fragment_shader]
+    call [rel ptr_glAttachShader]
+
+    ; void glLinkProgram(GLuint program);
+    mov ecx, [rel program]
+    call [rel ptr_glLinkProgram]
+
+    ; void glGetProgramiv(GLuint program, GLenum pname, GLint *params)
+    mov ecx, [rel program]
+    mov rdx, 0x00008B82 ;GL_LINK_STATUS
+    lea r8, [rel program_status]
+    call [rel ptr_glGetProgramiv]
+
+    lea rcx, [rel program_status_id]
+    mov rdx, [rel program_status] ; 1 shows that its success
+    call printf
+
+    ;================================================================================
+    
+
+    jmp loop
+
+.createProgramFail:
+    lea rcx, [rel msg_create_program_fail]
+    call printf
+
+    mov eax, 1
+    jmp exit
 
 loop:
     mov rcx, [rel window_ptr]
