@@ -1,8 +1,17 @@
+GLFW_CONTEXT_VERSION_MAJOR equ 0x00022002
+GLFW_CONTEXT_VERSION_MINOR equ 0x00022003
+GLFW_OPENGL_PROFILE equ 0x00022008
+GLFW_OPENGL_CORE_PROFILE equ 0x00032001
+GLFW_KEY_A equ 65
+GLFW_KEY_D equ 68
+
 GL_ARRAY_BUFFER equ 0x8892
 GL_STATIC_DRAW equ 0x88E4
 GL_FLOAT equ 0x1406
 GL_TRIANGLES equ 0x0004
 GL_COLOR_BUFFER_BIT equ 0x4000
+
+
 
 section .data
     window_title db "Triangle 243", 0
@@ -12,17 +21,21 @@ section .data
     clear_blue dd 0.8
     clear_alpha dd 1.0
 
+    x_position dd 0
+    move_speed dd 0.001
+
     vertex_shader_src:
-        db "#version 330 core", 10 ;use GLSL 3.30 core
+        db "#version 460 core", 10
         db "layout (location = 0) in vec2 aPos;", 10
+        db "uniform float xOffset;", 10
         db "void main()", 10
         db "{", 10
-        db "    gl_Position = vec4(aPos, 0.0, 1.0);", 10 ;apos.x and y, 0.0 is z, 1.0 is w
+        db "    gl_Position = vec4(aPos.x + xOffset, aPos.y, 0.0, 1.0);", 10
         db "}", 10
         db 0
 
     fragment_shader_src:
-        db "#version 330 core", 10
+        db "#version 460 core", 10
         db "out vec4 FragColor;", 10
         db "void main()", 10
         db "{", 10
@@ -53,12 +66,15 @@ section .data
     name_glEnableVertexAttribArray db "glEnableVertexAttribArray", 0
     name_glUseProgram db "glUseProgram", 0
     name_glDrawArrays db "glDrawArrays", 0
-    
+    name_glGetUniformLocation db "glGetUniformLocation", 0
+    name_glUniform1f db "glUniform1f", 0
+
+    uniform_x_name db "xOffset", 0
 
     msg_shader_ok db "Shader compiled", 10, 0
     msg_shader_fail db "Shader failed to compile", 10, 0
     program_status_id db "Program status ID: %d", 10, 0
-
+    print_number db "%d", 10, 0
 
     ; debugging tools
     a db "a", 10, 0
@@ -94,6 +110,8 @@ section .bss
     ptr_glEnableVertexAttribArray resq 1
     ptr_glUseProgram resq 1
     ptr_glDrawArrays resq 1
+    ptr_glGetUniformLocation resq 1
+    ptr_glUniform1f resq 1
     vertex_shader resd 1 ;4 bytes
     vertex_source_ptr resq 1 ;8 bytes
     fragment_shader resd 1
@@ -103,7 +121,7 @@ section .bss
     shader_status resd 1
     vbo resd 1
     vao resd 1
-
+    x_location resd 1
 
 section .text
     global main
@@ -121,11 +139,11 @@ section .text
     extern glfwDestroyWindow ;one param, window pointer. cleanup before exiting. ptr is invalid after cleanup
     extern glfwTerminate ;no params, exit glfw
     extern glfwGetError
+    extern glfwGetKey
 
     extern glGetString
     extern glClearColor ;red green blue alpha/opacity, all floats. because its floats, it goes into xmm
     extern glClear
-
 main:
     sub rsp, 40
 
@@ -133,17 +151,17 @@ main:
     test eax, eax
     jz init_failed
 
-    mov ecx, 0x00022002 ;code for req opengl, GLFW_CONTEXT_VERSION_MAJOR
-    mov edx, 4 ;opengl major version
+    mov ecx, GLFW_CONTEXT_VERSION_MAJOR
+    mov edx, 4 
     call glfwWindowHint
 
-    mov ecx, 0x00022003 ;GLFW_CONTEXT_VERSION_MINOR
-    mov edx, 6 
+    mov ecx, GLFW_CONTEXT_VERSION_MINOR
+    mov edx, 6 ; version 4.6
     call glfwWindowHint
 
-    ;requests core profile
-    mov ecx, 0x00022008 ;GLFW_OPENGL_PROFILE
-    mov edx, 0x00032001 ;GLFW_OPENGL_CORE_PROFILE
+    ; requests core profile
+    mov ecx, GLFW_OPENGL_PROFILE
+    mov edx, GLFW_OPENGL_CORE_PROFILE
     call glfwWindowHint
 
     mov ecx, 800
@@ -170,28 +188,24 @@ main:
     mov [rel ptr_glGenVertexArrays], rax
 
     ; load all functions, because GLAD was not used
-    ; load glCreateShader
     lea rcx, [rel name_glCreateShader]
     call glfwGetProcAddress
     test rax, rax
     jz func_load_failed
     mov [rel ptr_glCreateShader], rax
 
-    ; load glShaderSrc
     lea rcx, [rel name_glShaderSource]
     call glfwGetProcAddress
     test rax, rax
     jz func_load_failed
     mov [rel ptr_glShaderSource], rax
 
-    ; load glCompileShader
     lea rcx, [rel name_glCompileShader]
     call glfwGetProcAddress
     test rax, rax
     jz func_load_failed
     mov [rel ptr_glCompileShader], rax
 
-    ; load glGetShaderiv
     lea rcx, [rel name_glGetShaderiv]
     call glfwGetProcAddress
     test rax, rax
@@ -269,6 +283,18 @@ main:
     test rax, rax
     jz func_load_failed
     mov [rel ptr_glDrawArrays], rax
+
+    lea rcx, [rel name_glGetUniformLocation]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glGetUniformLocation], rax
+
+    lea rcx, [rel name_glUniform1f]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glUniform1f], rax
 
     lea rcx, [rel msg_func_ok]
     call printf
@@ -478,10 +504,46 @@ loop:
     call glClear ;paints the window GL_COLOR_BUFFER_BIT, clears the colour buffer with what was selected
 
     ; void glUseProgram(GLuint program)
-    mov rcx, [rel program]
+    mov ecx, [rel program]
     call [rel ptr_glUseProgram]
 
-    ; bind the VAO every frame
+    ; GLint glGetUniformLocation(GLuint program, const GLchar *name) Returns: 0 
+    ; searches for xOffset, returns location of xOffset, a uniform variable defined in the GLSL shader
+    mov ecx, [rel program]
+    lea rdx, [rel uniform_x_name]
+    call [rel ptr_glGetUniformLocation]
+    mov [rel x_location], eax
+
+    ; int glfwGetKey(GLFWwindow *window, int key). Returns 1 if held down
+    mov rcx, [rel window_ptr]
+    mov edx, GLFW_KEY_A
+    call glfwGetKey
+    cmp eax, 1
+    jne .check_d_key
+
+    movss xmm0, [rel x_position]
+    subss xmm0, [rel move_speed]
+    movss [rel x_position], xmm0
+
+.check_d_key:
+    mov rcx, [rel window_ptr]
+    mov edx, GLFW_KEY_D
+    call glfwGetKey
+    cmp eax, 1
+    jne movement_done
+
+    movss xmm0, [rel x_position]
+    addss xmm0, [rel move_speed]
+    movss [rel x_position], xmm0
+
+movement_done:
+    ; void glUniform1f(GLint location, GLfloat v0)
+    ; changes the value of xOffset to x_position
+    mov ecx, [rel x_location]
+    movss xmm1, [rel x_position]
+    call [rel ptr_glUniform1f]
+
+    ; bind the VAO every frame (put this right below glUseProgram or here?)
     mov rcx, [rel vao]
     call [rel ptr_glBindVertexArray]
 
