@@ -1,12 +1,16 @@
+GL_ARRAY_BUFFER equ 0x8892
+GL_STATIC_DRAW equ 0x88E4
+GL_FLOAT equ 0x1406
+GL_TRIANGLES equ 0x0004
+GL_COLOR_BUFFER_BIT equ 0x4000
+
 section .data
-    window_title db "Window 243", 0
+    window_title db "Triangle 243", 0
 
     clear_red dd 0.1
     clear_green dd 0.2
     clear_blue dd 0.8
     clear_alpha dd 1.0
-
-    name_glGenVertexArrays db "glGenVertexArrays", 0
 
     vertex_shader_src:
         db "#version 330 core", 10 ;use GLSL 3.30 core
@@ -40,6 +44,15 @@ section .data
     name_glAttachShader db "glAttachShader", 0
     name_glLinkProgram db "glLinkProgram", 0
     name_glGetProgramiv db "glGetProgramiv", 0
+    name_glGenBuffers db "glGenBuffers", 0
+    name_glBindBuffer db "glBindBuffer", 0
+    name_glBufferData db "glBufferData", 0
+    name_glGenVertexArrays db "glGenVertexArrays", 0
+    name_glBindVertexArray db "glBindVertexArray", 0
+    name_glVertexAttribPointer db "glVertexAttribPointer", 0
+    name_glEnableVertexAttribArray db "glEnableVertexAttribArray", 0
+    name_glUseProgram db "glUseProgram", 0
+    name_glDrawArrays db "glDrawArrays", 0
     
 
     msg_shader_ok db "Shader compiled", 10, 0
@@ -73,6 +86,14 @@ section .bss
     ptr_glAttachShader resq 1
     ptr_glLinkProgram resq 1
     ptr_glGetProgramiv resq 1
+    ptr_glGenBuffers resq 1
+    ptr_glBindBuffer resq 1
+    ptr_glBufferData resq 1
+    ptr_glBindVertexArray resq 1
+    ptr_glVertexAttribPointer resq 1
+    ptr_glEnableVertexAttribArray resq 1
+    ptr_glUseProgram resq 1
+    ptr_glDrawArrays resq 1
     vertex_shader resd 1 ;4 bytes
     vertex_source_ptr resq 1 ;8 bytes
     fragment_shader resd 1
@@ -80,6 +101,8 @@ section .bss
     program resq 1
     program_status resd 1
     shader_status resd 1
+    vbo resd 1
+    vao resd 1
 
 
 section .text
@@ -198,6 +221,54 @@ main:
     test rax, rax
     jz func_load_failed
     mov [rel ptr_glGetProgramiv], rax
+
+    lea rcx, [rel name_glGenBuffers]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glGenBuffers], rax
+
+    lea rcx, [rel name_glBindBuffer]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glBindBuffer], rax
+
+    lea rcx, [rel name_glBufferData]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glBufferData], rax
+
+    lea rcx, [rel name_glBindVertexArray]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glBindVertexArray], rax
+
+    lea rcx, [rel name_glVertexAttribPointer]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glVertexAttribPointer], rax
+
+    lea rcx, [rel name_glEnableVertexAttribArray]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glEnableVertexAttribArray], rax
+
+    lea rcx, [rel name_glUseProgram]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glUseProgram], rax
+
+    lea rcx, [rel name_glDrawArrays]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glDrawArrays], rax
 
     lea rcx, [rel msg_func_ok]
     call printf
@@ -343,7 +414,50 @@ shader_check_done:
     call printf
 
     ;================================================================================
+
+    ; void glGenBuffers(GLsizei n, GLuint *buffers)
+    mov ecx, 1 ; Generate one buffer
+    lea rdx, [rel vbo] ; vbo where we store the buffer
+    call [rel ptr_glGenBuffers]
+
+    ; void glBindBuffer(GLenum target, GLuint buffer)
+    mov ecx, GL_ARRAY_BUFFER
+    mov rdx, [rel vbo]
+    call [rel ptr_glBindBuffer]
     
+    ; void glBufferData(GLenum target, GLsizeiptr size, const void *data, GLenum usage)
+    mov ecx, GL_ARRAY_BUFFER
+    mov rdx, 24 ; triangle 6 floats, each float 4 bytes.
+    lea r8, [rel vertices]
+    mov r9d, GL_STATIC_DRAW
+    call [rel ptr_glBufferData]
+
+    ; void glGenVertexArrays(GLsizei n, GLuint *arrays)
+    mov ecx, 1
+    lea rdx, [rel vao]
+    call [rel ptr_glGenVertexArrays]
+
+    ; void glBindVertexArray(GLuint array)
+    mov rcx, [rel vao]
+    call [rel ptr_glBindVertexArray]
+
+    ; void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer)
+    sub rsp, 16
+
+    xor ecx, ecx ; index = 0 because layout(location = 0)
+    mov edx, 2 ; 2 components per vertex, default is 4
+    mov r8d, GL_FLOAT
+    xor r9d, r9d
+    mov qword [rsp+32], 8 ; 8 bytes per vertex
+    mov qword [rsp+40], 0
+
+    call [rel ptr_glVertexAttribPointer]
+
+    add rsp, 16
+
+    ; void glEnableVertexAttribArray(GLuint index)
+    xor ecx, ecx
+    call [rel ptr_glEnableVertexAttribArray]
 
     jmp loop
 
@@ -357,18 +471,30 @@ shader_check_done:
 loop:
     mov rcx, [rel window_ptr]
     call glfwWindowShouldClose
-
     test eax, eax
     jnz cleanup
 
-    mov ecx, 0x00004000
+    mov ecx, GL_COLOR_BUFFER_BIT
     call glClear ;paints the window GL_COLOR_BUFFER_BIT, clears the colour buffer with what was selected
+
+    ; void glUseProgram(GLuint program)
+    mov rcx, [rel program]
+    call [rel ptr_glUseProgram]
+
+    ; bind the VAO every frame
+    mov rcx, [rel vao]
+    call [rel ptr_glBindVertexArray]
+
+    ; void glDrawArrays(GLenum mode, GLint first, GLsizei count)
+    mov ecx, GL_TRIANGLES
+    xor edx, edx ; start at vertex index 0
+    mov r8d, 3 ; process 3 vertices
+    call [rel ptr_glDrawArrays]
 
     mov rcx, [rel window_ptr]
     call glfwSwapBuffers ;swaps back and front buffers to make the new frame visible
 
     call glfwPollEvents
-
     jmp loop
 
 cleanup:
