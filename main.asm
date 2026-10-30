@@ -2,16 +2,22 @@ GLFW_CONTEXT_VERSION_MAJOR equ 0x00022002
 GLFW_CONTEXT_VERSION_MINOR equ 0x00022003
 GLFW_OPENGL_PROFILE equ 0x00022008
 GLFW_OPENGL_CORE_PROFILE equ 0x00032001
+GLFW_KEY_W equ 87
 GLFW_KEY_A equ 65
+GLFW_KEY_S equ 83
 GLFW_KEY_D equ 68
+GLFW_KEY_Q equ 81
+GLFW_KEY_E equ 69
 
+GL_VERTEX_SHADER equ 0x8b31
+GL_FRAGMENT_SHADER equ 0x8b30
+GL_COMPILE_STATUS equ 0x8b81
+GL_LINK_STATUS equ 0x8b82 
 GL_ARRAY_BUFFER equ 0x8892
 GL_STATIC_DRAW equ 0x88E4
 GL_FLOAT equ 0x1406
 GL_TRIANGLES equ 0x0004
 GL_COLOR_BUFFER_BIT equ 0x4000
-
-
 
 section .data
     window_title db "Triangle 243", 0
@@ -22,15 +28,23 @@ section .data
     clear_alpha dd 1.0
 
     x_position dd 0
-    move_speed dd 0.001
+    move_speed dd 0.243
+    angle_value dd 0.0
+    rotation_speed dd 1.5
 
     vertex_shader_src:
         db "#version 460 core", 10
         db "layout (location = 0) in vec2 aPos;", 10
         db "uniform float xOffset;", 10
+        db "uniform float angle;", 10
         db "void main()", 10
         db "{", 10
-        db "    gl_Position = vec4(aPos.x + xOffset, aPos.y, 0.0, 1.0);", 10
+        db "    mat2 rotation = mat2(", 10
+        db "        cos(angle), sin(angle),", 10
+        db "        -sin(angle), cos(angle)", 10
+        db "    );", 10
+        db "    vec2 rotatedPos = rotation * aPos;", 10
+        db "    gl_Position = vec4(rotatedPos.x + xOffset, rotatedPos.y, 0.0, 1.0);", 10
         db "}", 10
         db 0
 
@@ -70,11 +84,13 @@ section .data
     name_glUniform1f db "glUniform1f", 0
 
     uniform_x_name db "xOffset", 0
+    uniform_angle_name db "angle", 0
 
     msg_shader_ok db "Shader compiled", 10, 0
     msg_shader_fail db "Shader failed to compile", 10, 0
     program_status_id db "Program status ID: %d", 10, 0
     print_number db "%d", 10, 0
+    print_float db "%f", 10, 0
 
     ; debugging tools
     a db "a", 10, 0
@@ -122,6 +138,11 @@ section .bss
     vbo resd 1
     vao resd 1
     x_location resd 1
+    previous_time resq 1
+    delta_time resq 1
+    frame_movement resd 1
+    angle_location resd 1
+    frame_rotation resd 1
 
 section .text
     global main
@@ -140,10 +161,12 @@ section .text
     extern glfwTerminate ;no params, exit glfw
     extern glfwGetError
     extern glfwGetKey
+    extern glfwGetTime
 
     extern glGetString
     extern glClearColor ;red green blue alpha/opacity, all floats. because its floats, it goes into xmm
     extern glClear
+
 main:
     sub rsp, 40
 
@@ -309,14 +332,15 @@ func_load_failed:
     jmp exit
 
 func_load_done:
+    ; void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha)
     movss xmm0, [rel clear_red]
     movss xmm1, [rel clear_green]
     movss xmm2, [rel clear_blue]
     movss xmm3, [rel clear_alpha]
     call glClearColor ;sets the colour when the colour buffers are cleared
 
-    ;create vertex shader
-    mov ecx, 0x00008B31
+    ; GLuint glCreateShader(GLenum shaderType)
+    mov ecx, GL_VERTEX_SHADER
     call [rel ptr_glCreateShader]
 
     test eax, eax
@@ -327,21 +351,20 @@ func_load_done:
     lea rax, [rel vertex_shader_src]
     mov [rel vertex_source_ptr], rax
 
-    ;gl shader src (shader, 1, &source_ptr, null)
+    ; void glShaderSource(GLuint shader, GLsizei count, const GLchar **string, constGLint *length)
     mov ecx, [rel vertex_shader]
     mov edx, 1
     lea r8, [rel vertex_source_ptr]
     xor r9d, r9d
     call [rel ptr_glShaderSource]
 
-    ;compile shader
-
+    ; void glCompileShader(GLuint shader)
     mov ecx, [rel vertex_shader]
     call [rel ptr_glCompileShader]
 
-    ;get shader iv(shader, gl_compile_status, &status)
+    ; void glGetShaderiv(GLuint shader, GLenum pname, GLint *params)
     mov ecx, [rel vertex_shader]
-    mov edx, 0x00008B81
+    mov edx, GL_COMPILE_STATUS
     lea r8, [rel shader_status]
     call [rel ptr_glGetShaderiv]
 
@@ -350,7 +373,7 @@ func_load_done:
 
     ;====================================================================================
     ; Create fragment shader
-    mov ecx, 0x00008B30 ;GL_FRAGMENT_SHADER
+    mov ecx, GL_FRAGMENT_SHADER
     call [rel ptr_glCreateShader]
 
     test eax, eax
@@ -375,7 +398,7 @@ func_load_done:
 
     ;get shader iv(shader, gl_compile_status, &status)
     mov ecx, [rel fragment_shader]
-    mov edx, 0x00008B81
+    mov edx, GL_COMPILE_STATUS
     lea r8, [rel shader_status]
     call [rel ptr_glGetShaderiv]
 
@@ -411,7 +434,7 @@ shader_check_done:
 
     ; void glGetProgramiv(GLuint program, GLenum pname, GLint *params)
     mov ecx, [rel program]
-    mov rdx, 0x00008B82 ;GL_LINK_STATUS
+    mov rdx, GL_LINK_STATUS
     lea r8, [rel program_status]
     call [rel ptr_glGetProgramiv]
 
@@ -431,7 +454,7 @@ shader_check_done:
 
     ; void glGetProgramiv(GLuint program, GLenum pname, GLint *params)
     mov ecx, [rel program]
-    mov rdx, 0x00008B82 ;GL_LINK_STATUS
+    mov rdx, GL_LINK_STATUS
     lea r8, [rel program_status]
     call [rel ptr_glGetProgramiv]
 
@@ -481,9 +504,13 @@ shader_check_done:
 
     add rsp, 16
 
-    ; void glEnableVertexAttribArray(GLuint index)
+    ; void glEnableVertexAttribArray(GLuint index) index is 0 for now
     xor ecx, ecx
     call [rel ptr_glEnableVertexAttribArray]
+
+    ; double glfwGetTime(void)
+    call glfwGetTime
+    movsd [rel previous_time], xmm0
 
     jmp loop
 
@@ -514,6 +541,36 @@ loop:
     call [rel ptr_glGetUniformLocation]
     mov [rel x_location], eax
 
+    mov ecx, [rel program]
+    lea rdx, [rel uniform_angle_name]
+    call [rel ptr_glGetUniformLocation]
+    mov [rel angle_location], eax
+
+    call glfwGetTime
+
+    ; Calculate time difference
+    ; for A, D:
+    movsd xmm1, xmm0
+    subsd xmm1, [rel previous_time]
+    movsd [rel delta_time], xmm1
+    movsd [rel previous_time], xmm0
+    cvtsd2ss xmm0, [rel delta_time]
+    mulss xmm0, [rel move_speed]
+    movss [rel frame_movement], xmm0
+
+    ; for W, S:
+
+
+    ; for Q, E:
+    cvtsd2ss xmm0, [rel delta_time] ; Is this needed?
+    mulss xmm0, [rel rotation_speed]
+    movss [rel frame_rotation], xmm0
+
+    ; lea rcx, [rel print_float]
+    ; movsd xmm1, [rel frame_movement]
+    ; movq rdx, xmm1
+    ; call printf
+
     ; int glfwGetKey(GLFWwindow *window, int key). Returns 1 if held down
     mov rcx, [rel window_ptr]
     mov edx, GLFW_KEY_A
@@ -522,7 +579,7 @@ loop:
     jne .check_d_key
 
     movss xmm0, [rel x_position]
-    subss xmm0, [rel move_speed]
+    subss xmm0, [rel frame_movement]
     movss [rel x_position], xmm0
 
 .check_d_key:
@@ -530,17 +587,45 @@ loop:
     mov edx, GLFW_KEY_D
     call glfwGetKey
     cmp eax, 1
-    jne movement_done
+    jne .check_q_key
 
     movss xmm0, [rel x_position]
-    addss xmm0, [rel move_speed]
+    addss xmm0, [rel frame_movement]
     movss [rel x_position], xmm0
+
+.check_q_key:
+    mov rcx, [rel window_ptr]
+    mov edx, GLFW_KEY_Q
+    call glfwGetKey
+    cmp eax, 1
+    jne .check_e_key 
+
+    ; Rotate somehow
+    movss xmm0, [rel angle_value]
+    addss xmm0, [rel frame_rotation]
+    movss [rel angle_value], xmm0
+
+.check_e_key:
+    mov rcx, [rel window_ptr]
+    mov edx, GLFW_KEY_E
+    call glfwGetKey
+    cmp eax, 1
+    jne movement_done
+
+    movss xmm0, [rel angle_value]
+    subss xmm0, [rel frame_rotation]
+    movss [rel angle_value], xmm0
 
 movement_done:
     ; void glUniform1f(GLint location, GLfloat v0)
     ; changes the value of xOffset to x_position
     mov ecx, [rel x_location]
     movss xmm1, [rel x_position]
+    call [rel ptr_glUniform1f]
+
+    ; the same for the angle
+    mov ecx, [rel angle_location]
+    movss xmm1, [rel angle_value]
     call [rel ptr_glUniform1f]
 
     ; bind the VAO every frame (put this right below glUseProgram or here?)
