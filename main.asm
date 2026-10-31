@@ -8,6 +8,8 @@ GLFW_KEY_S equ 83
 GLFW_KEY_D equ 68
 GLFW_KEY_Q equ 81
 GLFW_KEY_E equ 69
+GLFW_KEY_Z equ 90
+GLFW_KEY_X equ 88
 
 GL_VERTEX_SHADER equ 0x8b31
 GL_FRAGMENT_SHADER equ 0x8b30
@@ -29,22 +31,39 @@ section .data
 
     x_position dd 0
     move_speed dd 0.243
+
     angle_value dd 0.0
     rotation_speed dd 1.5
+
+    scale_value dd 1.0
+    scale_speed dd 0.8
+    min_scale dd 0.2
+    max_scale dd 2.0
+    
+    uniform_x_name db "xOffset", 0
+    uniform_angle_name db "angle", 0
+    uniform_scale_name db "scale", 0
 
     vertex_shader_src:
         db "#version 460 core", 10
         db "layout (location = 0) in vec2 aPos;", 10
         db "uniform float xOffset;", 10
         db "uniform float angle;", 10
+        db "uniform float scale;", 10
         db "void main()", 10
         db "{", 10
         db "    mat2 rotation = mat2(", 10
         db "        cos(angle), sin(angle),", 10
         db "        -sin(angle), cos(angle)", 10
         db "    );", 10
-        db "    vec2 rotatedPos = rotation * aPos;", 10
-        db "    gl_Position = vec4(rotatedPos.x + xOffset, rotatedPos.y, 0.0, 1.0);", 10
+        db "    mat2 scaling = mat2(", 10
+        db "        scale, 0.0,", 10
+        db "        0.0, scale", 10
+        db "    );", 10
+        db "    vec2 rotatedPos = aPos * rotation;", 10
+        db "    vec2 translatedPos = rotatedPos + vec2(xOffset, 0.0);", 10
+        db "    vec2 scaledPos = translatedPos * scale;", 10
+        db "    gl_Position = vec4(scaledPos, 0.0, 1.0);", 10
         db "}", 10
         db 0
 
@@ -82,9 +101,6 @@ section .data
     name_glDrawArrays db "glDrawArrays", 0
     name_glGetUniformLocation db "glGetUniformLocation", 0
     name_glUniform1f db "glUniform1f", 0
-
-    uniform_x_name db "xOffset", 0
-    uniform_angle_name db "angle", 0
 
     msg_shader_ok db "Shader compiled", 10, 0
     msg_shader_fail db "Shader failed to compile", 10, 0
@@ -137,12 +153,18 @@ section .bss
     shader_status resd 1
     vbo resd 1
     vao resd 1
-    x_location resd 1
+
     previous_time resq 1
     delta_time resq 1
+
+    x_location resd 1
     frame_movement resd 1
+
     angle_location resd 1
     frame_rotation resd 1
+
+    scale_location resd 1
+    frame_scale resd 1
 
 section .text
     global main
@@ -162,6 +184,7 @@ section .text
     extern glfwGetError
     extern glfwGetKey
     extern glfwGetTime
+    extern glfwSwapInterval
 
     extern glGetString
     extern glClearColor ;red green blue alpha/opacity, all floats. because its floats, it goes into xmm
@@ -202,12 +225,14 @@ main:
     mov rcx, [rel window_ptr]
     call glfwMakeContextCurrent ;subsequent opengl calls should operate on this windows context
 
+    ; void glfwSwapInterval(int interval)
+    mov ecx, 1
+    call glfwSwapInterval
+
     lea rcx, [rel name_glGenVertexArrays]
     call glfwGetProcAddress ;returned function address stored in rax
-
     test rax, rax
     jz func_load_failed
-
     mov [rel ptr_glGenVertexArrays], rax
 
     ; load all functions, because GLAD was not used
@@ -546,6 +571,11 @@ loop:
     call [rel ptr_glGetUniformLocation]
     mov [rel angle_location], eax
 
+    mov ecx, [rel program]
+    lea rdx, [rel uniform_scale_name]
+    call [rel ptr_glGetUniformLocation]
+    mov [rel scale_location], eax
+
     call glfwGetTime
 
     ; Calculate time difference
@@ -566,11 +596,19 @@ loop:
     mulss xmm0, [rel rotation_speed]
     movss [rel frame_rotation], xmm0
 
+    ; for Z, X:
+    cvtsd2ss xmm0, [rel delta_time]
+    mulss xmm0, [rel scale_speed]
+    movss [rel frame_scale], xmm0
+
     ; lea rcx, [rel print_float]
     ; movsd xmm1, [rel frame_movement]
     ; movq rdx, xmm1
     ; call printf
 
+    jmp .check_a_key
+
+.check_a_key:
     ; int glfwGetKey(GLFWwindow *window, int key). Returns 1 if held down
     mov rcx, [rel window_ptr]
     mov edx, GLFW_KEY_A
@@ -610,11 +648,47 @@ loop:
     mov edx, GLFW_KEY_E
     call glfwGetKey
     cmp eax, 1
-    jne movement_done
+    jne .check_z_key
 
     movss xmm0, [rel angle_value]
     subss xmm0, [rel frame_rotation]
     movss [rel angle_value], xmm0
+
+.check_z_key:
+    mov rcx, [rel window_ptr]
+    mov edx, GLFW_KEY_Z
+    call glfwGetKey
+    cmp eax, 1
+    jne .check_x_key
+
+    movss xmm0, [rel scale_value]
+    addss xmm0, [rel frame_scale]
+    movss xmm1, [rel max_scale]
+    comiss xmm0, xmm1
+    ja .up_scale_fix
+    movss [rel scale_value], xmm0
+    jmp .check_x_key
+
+.up_scale_fix:
+    movss [rel scale_value], xmm1
+
+.check_x_key:
+    mov rcx, [rel window_ptr]
+    mov edx, GLFW_KEY_X
+    call glfwGetKey
+    cmp eax, 1
+    jne movement_done
+
+    movss xmm0, [rel scale_value]
+    subss xmm0, [rel frame_scale]
+    movss xmm1, [rel min_scale]
+    comiss xmm0, xmm1
+    jb .down_scale_fix
+    movss [rel scale_value], xmm0
+    jmp movement_done
+
+.down_scale_fix:
+    movss [rel scale_value], xmm1
 
 movement_done:
     ; void glUniform1f(GLint location, GLfloat v0)
@@ -626,6 +700,11 @@ movement_done:
     ; the same for the angle
     mov ecx, [rel angle_location]
     movss xmm1, [rel angle_value]
+    call [rel ptr_glUniform1f]
+
+    ; scale
+    mov ecx, [rel scale_location]
+    movss xmm1, [rel scale_value]
     call [rel ptr_glUniform1f]
 
     ; bind the VAO every frame (put this right below glUseProgram or here?)

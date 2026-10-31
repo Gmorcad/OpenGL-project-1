@@ -5,3 +5,15 @@
     ; mov rdx, rax
     ; lea rcx, [rel version_format]
     ; call printf
+
+    mov ecx, 0x1f01
+    call glGetString
+    mov rcx, rax
+    call printf
+    prints: the local computer graphics card
+    
+
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    lea rcx, [rel a]
+    call printf
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
