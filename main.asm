@@ -32,13 +32,18 @@ section .data
     clear_blue dd 0.8
     clear_alpha dd 1.0
 
-    x_position dd 0
+    x_position dd -0.3
+    x_position_2 dd 0.3
+    y_position dd 0
+    y_position_2 dd 0
     move_speed dd 0.243
 
     angle_value dd 0.0
+    angle_value_2 dd 0.0
     rotation_speed dd 1.5
 
     scale_value dd 1.0
+    scale_value_2 dd 1.0
     scale_speed dd 0.8
     min_scale dd 0.2
     max_scale dd 2.0
@@ -149,6 +154,7 @@ section .bss
     delta_time resq 1
 
     x_location resd 1
+    y_location resd 1
     frame_movement resd 1
 
     angle_location resd 1
@@ -159,6 +165,7 @@ section .bss
 
     model_location resd 1
     model_matrix resd 9
+    model_matrix_2 resd 9
 
     sin_value resd 1
     cos_value resd 1
@@ -565,6 +572,10 @@ loop:
     mov ecx, [rel program]
     call [rel ptr_glUseProgram]
 
+    ; bind the VAO every frame
+    mov rcx, [rel vao]
+    call [rel ptr_glBindVertexArray]
+
     ; GLint glGetUniformLocation(GLuint program, const GLchar *name) Returns: 0 
     ; searches for name, returns location of name, a uniform variable defined in the GLSL shader
     mov ecx, [rel program]
@@ -637,7 +648,7 @@ loop:
     movss [rel model_matrix + 20], xmm2
 
     movss xmm0, [rel x_position]
-    xorps xmm1, xmm1
+    movss xmm1, [rel y_position]
     movss xmm2, [rel one]
     movss [rel model_matrix + 24], xmm0
     movss [rel model_matrix + 28], xmm1
@@ -649,6 +660,59 @@ loop:
     xor r8d, r8d
     lea r9, [rel model_matrix]
     call [rel ptr_glUniformMatrix3fv]
+
+    ; void glDrawArrays(GLenum mode, GLint first, GLsizei count)
+    mov ecx, GL_TRIANGLES
+    xor edx, edx ; start at vertex index 0
+    mov r8d, 3 ; process 3 vertices
+    call [rel ptr_glDrawArrays]
+
+    ; 2nd Triangle
+    movss xmm0, [rel angle_value_2]
+    call sinf
+    movss [rel sin_value], xmm0
+
+    movss xmm0, [rel angle_value_2]
+    call cosf
+    movss [rel cos_value], xmm0
+
+    movss xmm0, [rel scale_value_2]
+    mulss xmm0, [rel cos_value]
+    movss xmm1, [rel scale_value_2]
+    mulss xmm1, [rel sin_value]
+    xorps xmm2, xmm2
+    movss [rel model_matrix_2 + 0], xmm0
+    movss [rel model_matrix_2 + 4], xmm1
+    movss [rel model_matrix_2 + 8], xmm2
+
+    movss xmm0, [rel scale_value_2]
+    mulss xmm0, [rel sin_value]
+    movss xmm1, [rel neg_one]
+    mulss xmm0, xmm1
+    movss xmm1, [rel scale_value_2]
+    mulss xmm1, [rel cos_value]
+    xorps xmm2, xmm2
+    movss [rel model_matrix_2 + 12], xmm0
+    movss [rel model_matrix_2 + 16], xmm1
+    movss [rel model_matrix_2 + 20], xmm2
+
+    movss xmm0, [rel x_position_2]
+    movss xmm1, [rel y_position_2]
+    movss xmm2, [rel one]
+    movss [rel model_matrix_2 + 24], xmm0
+    movss [rel model_matrix_2 + 28], xmm1
+    movss [rel model_matrix_2 + 32], xmm2
+
+    mov ecx, [rel model_location]
+    mov edx, 1
+    xor r8d, r8d
+    lea r9, [rel model_matrix_2]
+    call [rel ptr_glUniformMatrix3fv]
+
+    mov ecx, GL_TRIANGLES
+    xor edx, edx
+    mov r8d, 3
+    call [rel ptr_glDrawArrays]
 
     jmp .check_a_key
 
@@ -664,16 +728,54 @@ loop:
     subss xmm0, [rel frame_movement]
     movss [rel x_position], xmm0
 
+    movss xmm0, [rel x_position_2]
+    subss xmm0, [rel frame_movement]
+    movss [rel x_position_2], xmm0
+
 .check_d_key:
     mov rcx, [rel window_ptr]
     mov edx, GLFW_KEY_D
     call glfwGetKey
     cmp eax, 1
-    jne .check_q_key
+    jne .check_w_key
 
     movss xmm0, [rel x_position]
     addss xmm0, [rel frame_movement]
     movss [rel x_position], xmm0
+
+    movss xmm0, [rel x_position_2]
+    addss xmm0, [rel frame_movement]
+    movss [rel x_position_2], xmm0
+
+.check_w_key:
+    mov rcx, [rel window_ptr]
+    mov edx, GLFW_KEY_W
+    call glfwGetKey
+    cmp eax, 1
+    jne .check_s_key
+
+    movss xmm0, [rel y_position]
+    addss xmm0, [rel frame_movement]
+    movss [rel y_position], xmm0
+
+    movss xmm0, [rel y_position_2]
+    addss xmm0, [rel frame_movement]
+    movss [rel y_position_2], xmm0
+
+.check_s_key:
+    mov rcx, [rel window_ptr]
+    mov edx, GLFW_KEY_S
+    call glfwGetKey
+    cmp eax, 1
+    jne .check_q_key
+
+    movss xmm0, [rel y_position]
+    subss xmm0, [rel frame_movement]
+    movss [rel y_position], xmm0
+
+    movss xmm0, [rel y_position_2]
+    subss xmm0, [rel frame_movement]
+    movss [rel y_position_2], xmm0
 
 .check_q_key:
     mov rcx, [rel window_ptr]
@@ -687,6 +789,10 @@ loop:
     addss xmm0, [rel frame_rotation]
     movss [rel angle_value], xmm0
 
+    movss xmm0, [rel angle_value_2]
+    subss xmm0, [rel frame_rotation]
+    movss [rel angle_value_2], xmm0
+
 .check_e_key:
     mov rcx, [rel window_ptr]
     mov edx, GLFW_KEY_E
@@ -697,6 +803,10 @@ loop:
     movss xmm0, [rel angle_value]
     subss xmm0, [rel frame_rotation]
     movss [rel angle_value], xmm0
+
+    movss xmm0, [rel angle_value_2]
+    addss xmm0, [rel frame_rotation]
+    movss [rel angle_value_2], xmm0
 
 .check_z_key:
     mov rcx, [rel window_ptr]
@@ -735,32 +845,6 @@ loop:
     movss [rel scale_value], xmm1
 
 movement_done:
-    ; void glUniform1f(GLint location, GLfloat v0)
-    ; changes the value of xOffset to x_position
-    mov ecx, [rel x_location]
-    movss xmm1, [rel x_position]
-    call [rel ptr_glUniform1f]
-
-    ; the same for the angle
-    mov ecx, [rel angle_location]
-    movss xmm1, [rel angle_value]
-    call [rel ptr_glUniform1f]
-
-    ; scale
-    mov ecx, [rel scale_location]
-    movss xmm1, [rel scale_value]
-    call [rel ptr_glUniform1f]
-
-    ; bind the VAO every frame (put this right below glUseProgram or here?)
-    mov rcx, [rel vao]
-    call [rel ptr_glBindVertexArray]
-
-    ; void glDrawArrays(GLenum mode, GLint first, GLsizei count)
-    mov ecx, GL_TRIANGLES
-    xor edx, edx ; start at vertex index 0
-    mov r8d, 3 ; process 3 vertices
-    call [rel ptr_glDrawArrays]
-
     mov rcx, [rel window_ptr]
     call glfwSwapBuffers ;swaps back and front buffers to make the new frame visible
 
