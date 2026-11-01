@@ -24,6 +24,9 @@ GL_COLOR_BUFFER_BIT equ 0x4000
 section .data
     window_title db "Triangle 243", 0
 
+    one dd 1.0
+    neg_one dd -1.0
+
     clear_red dd 0.1
     clear_green dd 0.2
     clear_blue dd 0.8
@@ -40,30 +43,16 @@ section .data
     min_scale dd 0.2
     max_scale dd 2.0
     
-    uniform_x_name db "xOffset", 0
-    uniform_angle_name db "angle", 0
-    uniform_scale_name db "scale", 0
+    uniform_model_name db "model", 0
 
     vertex_shader_src:
         db "#version 460 core", 10
         db "layout (location = 0) in vec2 aPos;", 10
-        db "uniform float xOffset;", 10
-        db "uniform float angle;", 10
-        db "uniform float scale;", 10
+        db "uniform mat3 model;", 10
         db "void main()", 10
         db "{", 10
-        db "    mat2 rotation = mat2(", 10
-        db "        cos(angle), sin(angle),", 10
-        db "        -sin(angle), cos(angle)", 10
-        db "    );", 10
-        db "    mat2 scaling = mat2(", 10
-        db "        scale, 0.0,", 10
-        db "        0.0, scale", 10
-        db "    );", 10
-        db "    vec2 rotatedPos = aPos * rotation;", 10
-        db "    vec2 translatedPos = rotatedPos + vec2(xOffset, 0.0);", 10
-        db "    vec2 scaledPos = translatedPos * scale;", 10
-        db "    gl_Position = vec4(scaledPos, 0.0, 1.0);", 10
+        db "    vec3 position = model * vec3(aPos, 1.0);", 10
+        db "    gl_Position = vec4(position.xy, 0.0, 1.0);", 10
         db "}", 10
         db 0
 
@@ -101,6 +90,7 @@ section .data
     name_glDrawArrays db "glDrawArrays", 0
     name_glGetUniformLocation db "glGetUniformLocation", 0
     name_glUniform1f db "glUniform1f", 0
+    name_glUniformMatrix3fv db "glUniformMatrix3fv", 0
 
     msg_shader_ok db "Shader compiled", 10, 0
     msg_shader_fail db "Shader failed to compile", 10, 0
@@ -144,6 +134,7 @@ section .bss
     ptr_glDrawArrays resq 1
     ptr_glGetUniformLocation resq 1
     ptr_glUniform1f resq 1
+    ptr_glUniformMatrix3fv resq 1
     vertex_shader resd 1 ;4 bytes
     vertex_source_ptr resq 1 ;8 bytes
     fragment_shader resd 1
@@ -165,6 +156,12 @@ section .bss
 
     scale_location resd 1
     frame_scale resd 1
+
+    model_location resd 1
+    model_matrix resd 9
+
+    sin_value resd 1
+    cos_value resd 1
 
 section .text
     global main
@@ -189,6 +186,9 @@ section .text
     extern glGetString
     extern glClearColor ;red green blue alpha/opacity, all floats. because its floats, it goes into xmm
     extern glClear
+
+    extern sinf
+    extern cosf
 
 main:
     sub rsp, 40
@@ -343,6 +343,12 @@ main:
     test rax, rax
     jz func_load_failed
     mov [rel ptr_glUniform1f], rax
+
+    lea rcx, [rel name_glUniformMatrix3fv]
+    call glfwGetProcAddress
+    test rax, rax
+    jz func_load_failed
+    mov [rel ptr_glUniformMatrix3fv], rax
 
     lea rcx, [rel msg_func_ok]
     call printf
@@ -560,21 +566,11 @@ loop:
     call [rel ptr_glUseProgram]
 
     ; GLint glGetUniformLocation(GLuint program, const GLchar *name) Returns: 0 
-    ; searches for xOffset, returns location of xOffset, a uniform variable defined in the GLSL shader
+    ; searches for name, returns location of name, a uniform variable defined in the GLSL shader
     mov ecx, [rel program]
-    lea rdx, [rel uniform_x_name]
+    lea rdx, [rel uniform_model_name]
     call [rel ptr_glGetUniformLocation]
-    mov [rel x_location], eax
-
-    mov ecx, [rel program]
-    lea rdx, [rel uniform_angle_name]
-    call [rel ptr_glGetUniformLocation]
-    mov [rel angle_location], eax
-
-    mov ecx, [rel program]
-    lea rdx, [rel uniform_scale_name]
-    call [rel ptr_glGetUniformLocation]
-    mov [rel scale_location], eax
+    mov [rel model_location], eax
 
     call glfwGetTime
 
@@ -605,6 +601,54 @@ loop:
     ; movsd xmm1, [rel frame_movement]
     ; movq rdx, xmm1
     ; call printf
+
+    ; Transformation matrix
+    ; Write in column order
+    ; MIGHT HAVE TO SHIFT THIS BELOW THE KEYBIND FUNCTIONS
+    ; s cos x  -s sin x  tx
+    ; s sin x  s cos x   0
+    ;    0        0      1
+    movss xmm0, [rel angle_value]
+    call sinf
+    movss [rel sin_value], xmm0
+
+    movss xmm0, [rel angle_value]
+    call cosf
+    movss [rel cos_value], xmm0
+
+    movss xmm0, [rel scale_value]
+    mulss xmm0, [rel cos_value]
+    movss xmm1, [rel scale_value]
+    mulss xmm1, [rel sin_value]
+    xorps xmm2, xmm2
+    movss [rel model_matrix + 0], xmm0
+    movss [rel model_matrix + 4], xmm1
+    movss [rel model_matrix + 8], xmm2
+
+    movss xmm0, [rel scale_value]
+    mulss xmm0, [rel sin_value]
+    movss xmm1, [rel neg_one]
+    mulss xmm0, xmm1
+    movss xmm1, [rel scale_value]
+    mulss xmm1, [rel cos_value]
+    xorps xmm2, xmm2
+    movss [rel model_matrix + 12], xmm0
+    movss [rel model_matrix + 16], xmm1
+    movss [rel model_matrix + 20], xmm2
+
+    movss xmm0, [rel x_position]
+    xorps xmm1, xmm1
+    movss xmm2, [rel one]
+    movss [rel model_matrix + 24], xmm0
+    movss [rel model_matrix + 28], xmm1
+    movss [rel model_matrix + 32], xmm2
+
+    ; void glUniformMatrix3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value)
+    mov ecx, [rel model_location]
+    mov edx, 1
+    xor r8d, r8d
+    lea r9, [rel model_matrix]
+    call [rel ptr_glUniformMatrix3fv]
 
     jmp .check_a_key
 
